@@ -16,6 +16,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
+
 def generate_launch_description():
     # Chemins de ressources pour que Gazebo resolve les meshes model://
     ws_install = os.path.join(os.path.expanduser("~"), "pick_place_ws", "install")
@@ -25,7 +26,7 @@ def generate_launch_description():
     ])
     for var in ("IGN_GAZEBO_RESOURCE_PATH", "GZ_SIM_RESOURCE_PATH"):
         os.environ[var] = mesh_paths + ":" + os.environ.get(var, "")
-
+    os.environ["IGN_GAZEBO_RENDER_ENGINE"] = "ogre2"
     pkg = FindPackageShare("pick_place_description")
 
     xacro_file = PathJoinSubstitution([pkg, "urdf", "ur5e_with_gripper.urdf.xacro"])
