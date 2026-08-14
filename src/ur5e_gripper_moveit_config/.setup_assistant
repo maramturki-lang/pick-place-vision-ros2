@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: pick_place_description
+    relative_path: urdf/ur5e_gripper.urdf
+  srdf:
+    relative_path: config/ur5e_with_gripper.srdf
+  package_settings:
+    author_name: Maram Turki
+    author_email: maram.turki@etudiant-enit.utm.tn
+    generated_timestamp: 1786726786
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
