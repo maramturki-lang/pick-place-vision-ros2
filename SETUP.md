@@ -73,3 +73,43 @@ Test de mouvement (une seule ligne) :
     ros2 topic pub -1 /joint_trajectory_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory '{joint_names: ["shoulder_pan_joint","shoulder_lift_joint","elbow_joint","wrist_1_joint","wrist_2_joint","wrist_3_joint"], points: [{positions: [1.0,-1.2,1.0,-1.5,-1.5,0.0], time_from_start: {sec: 3}}]}'
 
 Le bras doit se déplacer en 3 secondes dans Gazebo.
+## 5. Contrôle cartésien via MoveIt2
+
+Deux corrections sont nécessaires pour que `Plan & Execute` agisse
+réellement sur le robot simulé.
+
+### a) Contrôleur par défaut
+
+Dans `src/Universal_Robots_ROS2_Driver/ur_moveit_config/config/controllers.yaml` :
+MoveIt2 cible par défaut `scaled_joint_trajectory_controller`, qui
+n'existe que sur le robot physique. En simulation, seul
+`joint_trajectory_controller` est lancé.
+
+Inverser les deux champs `default` :
+
+    scaled_joint_trajectory_controller:  default: false
+    joint_trajectory_controller:         default: true
+
+### b) Synchronisation d'horloge
+
+Gazebo publie les états articulaires en temps simulé, MoveIt2 raisonne
+en temps système. Sans correction, MoveIt2 considère l'état du robot
+comme périmé et abandonne l'exécution :
+
+    Didn't receive robot state (joint angles) with recent timestamp
+    Failed to validate trajectory: couldn't receive full current joint state within 1s
+    Execution completed: ABORTED
+
+Lancer MoveIt2 avec le temps simulé :
+
+    ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur5e launch_rviz:=true use_sim_time:=true
+
+## 6. Lancement complet
+
+Terminal 1 :
+
+    ros2 launch ur_simulation_gz ur_sim_control.launch.py ur_type:=ur5e
+
+Terminal 2 :
+
+    ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur5e launch_rviz:=true use_sim_time:=true
