@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'move_to_pose = pick_place.move_to_pose:main',
+            'spawn_scene = pick_place.spawn_scene:main',
         ],
     },
 )
