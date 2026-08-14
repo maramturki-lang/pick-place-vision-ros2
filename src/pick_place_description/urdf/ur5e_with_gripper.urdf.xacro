@@ -29,14 +29,14 @@
 
   <!-- La bride d'adaptation UR -> Robotiq -->
   <xacro:include filename="$(find robotiq_description)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
-  <xacro:ur_to_robotiq prefix="" parent="tool0" child="robotiq_85_base_link"/>
+  <xacro:ur_to_robotiq prefix="" parent="tool0" child="gripper_mount_link"/>
 
   <!-- La pince Robotiq 2F-85 -->
   <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
   <xacro:robotiq_gripper
     name="RobotiqGripperHardwareInterface"
     prefix=""
-    parent="ur_to_robotiq_link"
+    parent="gripper_mount_link"
     sim_ignition="true"
     include_ros2_control="true">
     <origin xyz="0 0 0" rpy="0 0 0"/>
