@@ -206,3 +206,93 @@ récents :
     error: option --editable not recognized
 
 Solution : `pip3 install "setuptools==58.2.0"` (version attendue par Humble).
+## 10. Configuration MoveIt2 pour le robot complet
+
+Générée avec le Setup Assistant à partir d'un URDF figé :
+
+    xacro src/pick_place_description/urdf/ur5e_with_gripper.urdf.xacro \
+      simulation_controllers:=/tmp/dummy.yaml \
+      > src/pick_place_description/urdf/ur5e_gripper.urdf
+
+    ros2 launch moveit_setup_assistant setup_assistant.launch.py
+
+Réglages retenus :
+
+- Self-Collisions : matrice générée automatiquement (83 paires désactivées)
+- Virtual Joint : `fixed_base`, parent `world`, type `fixed`
+- Groupe `ur_manipulator` : chaîne `base_link -> tool0`, solveur KDL, RRTConnect
+- Groupe `gripper` : le seul joint `robotiq_85_left_knuckle_joint`, sans solveur
+- Poses : `home` (bras), `open` et `closed` (pince, 0 et 0.7929 rad)
+- End Effector : `gripper_eef`, parent link `tool0`, parent group `ur_manipulator`
+- Passive Joints : les cinq articulations `mimic` de la pince
+- Contrôleurs renommés en `joint_trajectory_controller` et `gripper_controller`
+
+Ne pas toucher à l'onglet `ros2_control URDF Modifications` : l'URDF
+possède déjà son bloc `ros2_control`, généré par `sim_ignition:=true`.
+
+### Piège 4 — moveit_controllers.yaml tronqué
+
+Le fichier généré s'arrête après la liste des joints de la pince, sans
+`action_ns` ni `default`. MoveIt2 ne charge alors qu'un contrôleur :
+
+    Returned 1 controllers in list
+    Unable to identify any set of controllers that can actuate the
+    specified joints: [ robotiq_85_left_knuckle_joint ]
+
+Compléter le bloc `gripper_controller` :
+
+      gripper_controller:
+        type: FollowJointTrajectory
+        joints:
+          - robotiq_85_left_knuckle_joint
+        action_ns: follow_joint_trajectory
+        default: true
+
+### Piège 5 — use_sim_time ignoré par le launch généré
+
+`generate_move_group_launch` n'expose pas `use_sim_time` comme argument.
+Le passer en ligne de commande n'a aucun effet — vérifiable avec :
+
+    ros2 param get /move_group use_sim_time
+    # Boolean value is: False
+
+Sans lui, MoveIt2 compare le temps système au temps simulé, juge l'état
+du robot périmé et abandonne toute exécution :
+
+    Failed to validate trajectory: couldn't receive full current joint state within 1s
+    Execution completed: ABORTED
+
+Solution : instancier le nœud `move_group` directement dans
+`launch/move_group.launch.py`.
+
+    from launch import LaunchDescription
+    from launch_ros.actions import Node
+    from moveit_configs_utils import MoveItConfigsBuilder
+
+    def generate_launch_description():
+        moveit_config = MoveItConfigsBuilder(
+            "ur5e_with_gripper", package_name="ur5e_gripper_moveit_config"
+        ).to_moveit_configs()
+
+        move_group = Node(
+            package="moveit_ros_move_group",
+            executable="move_group",
+            output="screen",
+            parameters=[
+                moveit_config.to_dict(),
+                {"use_sim_time": True},
+                {"publish_robot_description_semantic": True},
+            ],
+        )
+        return LaunchDescription([move_group])
+
+## 11. Lancement complet du système
+
+Trois terminaux :
+
+    ros2 launch pick_place_description sim.launch.py
+    ros2 launch ur5e_gripper_moveit_config move_group.launch.py
+    ros2 launch ur5e_gripper_moveit_config moveit_rviz.launch.py
+
+Dans RViz, panneau MotionPlanning : choisir le groupe `ur_manipulator`
+ou `gripper`, sélectionner une pose dans Goal State, puis Plan & Execute.
