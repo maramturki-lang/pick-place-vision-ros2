@@ -113,3 +113,96 @@ Terminal 1 :
 Terminal 2 :
 
     ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur5e launch_rviz:=true use_sim_time:=true
+    ## 7. Ajout de la pince Robotiq 2F-85
+
+### Dépôt
+
+    cd ~/pick_place_ws/src
+    git clone -b humble https://github.com/PickNikRobotics/ros2_robotiq_gripper.git
+    cd ~/pick_place_ws
+    colcon build --packages-select robotiq_description
+
+Seul `robotiq_description` est nécessaire. Les autres paquets du dépôt
+pilotent une vraie pince par port série et ne servent pas en simulation.
+
+La macro `robotiq_gripper` accepte un paramètre `sim_ignition:=true` qui
+génère automatiquement le bloc `ros2_control` adapté à la simulation.
+Une seule articulation est commandable, `robotiq_85_left_knuckle_joint`
+(0 = ouvert, 0.7929 = fermé) ; les cinq autres sont des `mimic`.
+
+### Piège 1 — doublon de link dans l'assemblage
+
+La macro `ur_to_robotiq` crée DEUX links : `ur_to_robotiq_link` et un
+link portant le nom passé en paramètre `child`. Donner
+`child="robotiq_85_base_link"` provoque un doublon, car la macro de la
+pince crée déjà ce link.
+
+    Error: link 'robotiq_85_base_link' is not unique.
+
+Solution : utiliser un nom neutre et le passer en parent à la pince.
+
+    <xacro:ur_to_robotiq prefix="" parent="tool0" child="gripper_mount_link"/>
+    <xacro:robotiq_gripper ... parent="gripper_mount_link" .../>
+
+Chaîne obtenue : tool0 -> ur_to_robotiq_link -> gripper_mount_link
+-> robotiq_85_base_link.
+
+Note : `xacro` ne détecte pas ce type d'erreur, seul le parseur URDF le
+fait. Valider avec :
+
+    xacro fichier.urdf.xacro > /tmp/test.urdf && check_urdf /tmp/test.urdf
+
+(nécessite `sudo apt install liburdfdom-tools`)
+
+### Piège 2 — version installée vs sources
+
+Sans `--symlink-install`, un paquet CMake copie ses fichiers dans
+`install/`. Modifier le xacro dans `src/` n'a alors aucun effet : le
+launch lit la copie figée. Symptôme typique — une erreur déjà corrigée
+qui persiste.
+
+Vérifier ce qui est réellement utilisé :
+
+    grep ... install/pick_place_description/share/pick_place_description/urdf/*.xacro
+
+Toujours compiler ce paquet avec `--symlink-install`.
+
+### Piège 3 — meshes model:// introuvables
+
+Gazebo cherche les meshes en `model://robotiq_description/meshes/...`
+et échoue : le bras s'affiche sans la pince.
+
+    [Err] Unable to find file with URI [model://robotiq_description/meshes/...]
+
+La racine doit pointer sur le dossier `share`, pas sur `install` :
+
+    export IGN_GAZEBO_RESOURCE_PATH=$HOME/pick_place_ws/install/robotiq_description/share:$HOME/pick_place_ws/install/ur_description/share
+
+Ces chemins sont désormais définis directement dans `sim.launch.py`, il
+n'y a donc plus rien à exporter manuellement.
+
+## 8. Lancement du robot complet
+
+    ros2 launch pick_place_description sim.launch.py
+
+Vérification :
+
+    ros2 control list_controllers
+    # joint_state_broadcaster      ... active
+    # joint_trajectory_controller  ... active
+    # gripper_controller           ... active
+
+Test de la pince (fermer puis ouvrir) :
+
+    ros2 topic pub -1 /gripper_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory '{joint_names: ["robotiq_85_left_knuckle_joint"], points: [{positions: [0.7929], time_from_start: {sec: 2}}]}'
+
+    ros2 topic pub -1 /gripper_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory '{joint_names: ["robotiq_85_left_knuckle_joint"], points: [{positions: [0.0], time_from_start: {sec: 2}}]}'
+
+## 9. Note sur setuptools
+
+`--symlink-install` échoue sur les paquets Python avec les setuptools
+récents :
+
+    error: option --editable not recognized
+
+Solution : `pip3 install "setuptools==58.2.0"` (version attendue par Humble).

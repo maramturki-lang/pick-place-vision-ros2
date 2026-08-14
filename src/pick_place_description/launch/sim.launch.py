@@ -18,6 +18,14 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # Chemins de ressources pour que Gazebo resolve les meshes model://
+    ws_install = os.path.join(os.path.expanduser("~"), "pick_place_ws", "install")
+    mesh_paths = ":".join([
+        os.path.join(ws_install, "robotiq_description", "share"),
+        os.path.join(ws_install, "ur_description", "share"),
+    ])
+    for var in ("IGN_GAZEBO_RESOURCE_PATH", "GZ_SIM_RESOURCE_PATH"):
+        os.environ[var] = mesh_paths + ":" + os.environ.get(var, "")
     pkg = FindPackageShare("pick_place_description")
 
     xacro_file = PathJoinSubstitution([pkg, "urdf", "ur5e_with_gripper.urdf.xacro"])
