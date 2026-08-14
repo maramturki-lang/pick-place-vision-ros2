@@ -1,5 +1,4 @@
 """Lance le UR5e equipe de la pince Robotiq 2F-85 dans Gazebo Fortress."""
-
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -26,10 +25,12 @@ def generate_launch_description():
     ])
     for var in ("IGN_GAZEBO_RESOURCE_PATH", "GZ_SIM_RESOURCE_PATH"):
         os.environ[var] = mesh_paths + ":" + os.environ.get(var, "")
+
     pkg = FindPackageShare("pick_place_description")
 
     xacro_file = PathJoinSubstitution([pkg, "urdf", "ur5e_with_gripper.urdf.xacro"])
     controllers = PathJoinSubstitution([pkg, "config", "controllers.yaml"])
+    world_file = PathJoinSubstitution([pkg, "worlds", "pick_place_world.sdf"])
 
     robot_description = {
         "robot_description": Command([
@@ -38,14 +39,16 @@ def generate_launch_description():
         ])
     }
 
-    # Gazebo Fortress, monde vide, demarre en lecture
+    # Gazebo Fortress, monde de la cellule de tri, demarre en lecture
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare("ros_gz_sim"), "launch", "gz_sim.launch.py"
             ])
         ]),
-        launch_arguments={"gz_args": "-r -v 3 empty.sdf"}.items(),
+        launch_arguments={
+            "gz_args": ["-r -v 3 ", world_file],
+        }.items(),
     )
 
     robot_state_publisher = Node(
@@ -62,10 +65,18 @@ def generate_launch_description():
         arguments=["-topic", "robot_description", "-name", "ur5e", "-z", "0.0"],
     )
 
+    # Horloge + flux de la camera RGB-D vers ROS2
     bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
-        arguments=["/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock"],
+        arguments=[
+            "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
+            "/rgbd/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/rgbd/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/rgbd/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
+            "/rgbd/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+        ],
+        parameters=[{"use_sim_time": True}],
         output="screen",
     )
 
