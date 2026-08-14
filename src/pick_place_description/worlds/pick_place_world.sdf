@@ -74,12 +74,21 @@
       </link>
     </model>
 
-    <model name="camera_post">
+    <model name="camera_gantry">
       <static>true</static>
-      <pose>0.55 -0.75 0.7 0 0 0</pose>
+      <pose>0.55 -0.75 0 0 0 0</pose>
       <link name="link">
-        <visual name="visual">
-          <geometry><cylinder><radius>0.02</radius><length>1.4</length></cylinder></geometry>
+        <visual name="mast">
+          <pose>0 0 0.72 0 0 0</pose>
+          <geometry><cylinder><radius>0.025</radius><length>1.44</length></cylinder></geometry>
+          <material>
+            <ambient>0.2 0.2 0.2 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+        <visual name="arm">
+          <pose>0 0.375 1.43 1.5708 0 0</pose>
+          <geometry><cylinder><radius>0.02</radius><length>0.75</length></cylinder></geometry>
           <material>
             <ambient>0.2 0.2 0.2 1</ambient>
             <diffuse>0.3 0.3 0.3 1</diffuse>
