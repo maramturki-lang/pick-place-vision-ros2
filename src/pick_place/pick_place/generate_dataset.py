@@ -3,7 +3,11 @@
 
 Boucle : nettoie la scene, spawn des objets aleatoires, attend la
 stabilisation physique, capture l'image, et calcule les bounding boxes
-a partir des poses REELLES lues dans Gazebo. Aucune annotation manuelle.
+a partir des poses REELLES lues dans Gazebo.
+
+Attention : Gazebo se degrade au fil des scenes (les services repondent
+de plus en plus lentement, jusqu'au timeout). Generer par lots de ~50 en
+redemarrant la simulation entre chaque, avec --start pour la numerotation.
 """
 
 import argparse
@@ -81,7 +85,7 @@ def object_sdf(name, rgba, shape):
 </sdf>"""
 
 
-def ign_service(service, reqtype, req, timeout=4000):
+def ign_service(service, reqtype, req, timeout=8000):
     return subprocess.run(
         ["ign", "service", "-s", f"/world/{WORLD}/{service}",
          "--reqtype", f"ignition.msgs.{reqtype}",
@@ -103,17 +107,21 @@ def spawn(sdf, name, x, y, z, yaw):
 
 
 def remove(name):
-    ign_service("remove", "Entity", f'name: "{name}", type: MODEL', 1500)
+    ign_service("remove", "Entity", f'name: "{name}", type: MODEL', 4000)
+
+
+def list_objects():
+    """Noms des objets de tri actuellement dans la scene."""
+    out = subprocess.run(["ign", "model", "--list"],
+                         capture_output=True, text=True).stdout
+    return [n.strip("- ").strip() for n in out.splitlines()
+            if any(n.strip("- ").strip().startswith(c + "_")
+                   for c in CLASS_NAMES)]
 
 
 def remove_all_objects():
-    """Ne supprime que les modeles reellement presents."""
-    out = subprocess.run(["ign", "model", "--list"],
-                         capture_output=True, text=True).stdout
-    for line in out.splitlines():
-        name = line.strip("- ").strip()
-        if any(name.startswith(c + "_") for c in CLASS_NAMES):
-            remove(name)
+    for name in list_objects():
+        remove(name)
 
 
 def gazebo_poses():
@@ -123,14 +131,8 @@ def gazebo_poses():
     roulent. Annoter les positions demandees produit des boites decalees,
     et le modele apprend sur une verite terrain fausse.
     """
-    out = subprocess.run(["ign", "model", "--list"],
-                         capture_output=True, text=True).stdout
-    names = [n.strip("- ").strip() for n in out.splitlines()
-             if any(n.strip("- ").strip().startswith(c + "_")
-                    for c in CLASS_NAMES)]
-
     poses = {}
-    for name in names:
+    for name in list_objects():
         info = subprocess.run(["ign", "model", "-m", name, "-p"],
                               capture_output=True, text=True).stdout
         nums = re.findall(r"\[([-\d.e]+)\s+([-\d.e]+)\s+([-\d.e]+)\]", info)
@@ -182,24 +184,43 @@ class Capture(Node):
 
 
 def make_sample(node, idx, out_img, out_lbl, n_objects):
-    """Genere une scene, capture, et ecrit image + annotations."""
+    """Genere une scene, capture, et ecrit image + annotations.
+
+    Retourne False si l'echantillon doit etre rejete.
+    """
     remove_all_objects()
+    if list_objects():
+        print(f"  [{idx}] nettoyage incomplet, rejete")
+        return False
 
     positions = scatter(n_objects)
+    n_spawned = 0
     for i, (x, y) in enumerate(positions):
         cls = random.choice(CLASS_NAMES)
         rgba, shape, half_h, _ = SPECS[cls]
         z = TABLE_Z + half_h + 0.002
         yaw = random.uniform(0, math.pi)
-        spawn(object_sdf(f"{cls}_{i}", rgba, shape), f"{cls}_{i}", x, y, z, yaw)
+        if spawn(object_sdf(f"{cls}_{i}", rgba, shape),
+                 f"{cls}_{i}", x, y, z, yaw):
+            n_spawned += 1
+
+    if n_spawned < len(positions):
+        print(f"  [{idx}] {n_spawned}/{len(positions)} spawns, rejete")
+        return False
 
     time.sleep(1.2)                      # stabilisation physique
     frame = node.grab()
     if frame is None:
-        print(f"  [{idx}] pas d'image, echantillon ignore")
+        print(f"  [{idx}] pas d'image, rejete")
         return False
 
     real = gazebo_poses()                # positions APRES stabilisation
+
+    # Si des poses manquent, l'image serait annotee comme vide et
+    # polluerait le dataset avec des faux negatifs.
+    if len(real) < n_spawned:
+        print(f"  [{idx}] {len(real)}/{n_spawned} poses lues, rejete")
+        return False
 
     lines = []
     for name, (x, y, z) in real.items():
@@ -210,9 +231,13 @@ def make_sample(node, idx, out_img, out_lbl, n_objects):
         xc, yc = u / IMG_W, v / IMG_H
         bw, bh = 2 * r_px / IMG_W, 2 * r_px / IMG_H
         if not (0 < xc < 1 and 0 < yc < 1):
-            continue                     # objet hors champ
+            continue                     # objet tombe hors champ
         lines.append(
             f"{CLASS_NAMES.index(cls)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+
+    if not lines:
+        print(f"  [{idx}] aucun objet dans le champ, rejete")
+        return False
 
     cv2.imwrite(os.path.join(out_img, f"{idx:04d}.png"), frame)
     with open(os.path.join(out_lbl, f"{idx:04d}.txt"), "w") as f:
@@ -222,18 +247,19 @@ def make_sample(node, idx, out_img, out_lbl, n_objects):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("-n", "--samples", type=int, default=300)
+    ap.add_argument("-n", "--samples", type=int, default=50,
+                    help="nombre d'echantillons de ce lot")
+    ap.add_argument("--start", type=int, default=0,
+                    help="index de depart (pour generer par lots)")
+    ap.add_argument("--val-every", type=int, default=5,
+                    help="1 echantillon sur N va dans le split validation")
     ap.add_argument("--min-objects", type=int, default=2)
     ap.add_argument("--max-objects", type=int, default=6)
-    ap.add_argument("--val-split", type=float, default=0.2)
     ap.add_argument("-o", "--out",
                     default=os.path.expanduser("~/pick_place_dataset"))
     args = ap.parse_args()
 
     root = args.out
-    n_val = int(args.samples * args.val_split)
-    n_train = args.samples - n_val
-
     for split in ("train", "val"):
         for kind in ("images", "labels"):
             os.makedirs(os.path.join(root, kind, split), exist_ok=True)
@@ -241,23 +267,26 @@ def main():
     rclpy.init()
     node = Capture()
 
-    print(f"Generation de {args.samples} echantillons dans {root}\n")
+    print(f"Lot : {args.samples} echantillons a partir de "
+          f"l'index {args.start}\n")
     t0 = time.time()
     ok = 0
-    for i in range(args.samples):
-        split = "train" if i < n_train else "val"
+    for k in range(args.samples):
+        i = args.start + k
+        # repartition deterministe : 1 sur 5 en validation
+        split = "val" if i % args.val_every == 0 else "train"
         n_obj = random.randint(args.min_objects, args.max_objects)
         if make_sample(node, i,
                        os.path.join(root, "images", split),
                        os.path.join(root, "labels", split),
                        n_obj):
             ok += 1
-        if (i + 1) % 10 == 0:
+        if (k + 1) % 10 == 0:
             el = time.time() - t0
-            eta = el / (i + 1) * (args.samples - i - 1)
-            print(f"  {i+1}/{args.samples}  ({el/60:.1f} min ecoulees, "
-                  f"~{eta/60:.1f} min restantes)")
+            print(f"  {k+1}/{args.samples}  ({el/60:.1f} min, "
+                  f"{ok} valides)")
 
+    # data.yaml regenere a chaque lot
     with open(os.path.join(root, "data.yaml"), "w") as f:
         f.write(f"path: {root}\n")
         f.write("train: images/train\n")
@@ -273,12 +302,8 @@ def main():
         except OSError:
             pass
 
-    print(f"\n{ok}/{args.samples} echantillons generes en "
+    print(f"\n{ok}/{args.samples} echantillons valides en "
           f"{(time.time()-t0)/60:.1f} min")
-    print(f"Config Ultralytics : {root}/data.yaml")
-
-    node.destroy_node()
-    rclpy.shutdown()
 
 
 if __name__ == "__main__":
