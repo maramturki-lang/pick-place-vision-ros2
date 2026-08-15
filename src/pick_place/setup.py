@@ -29,6 +29,7 @@ setup(
             'project_check = pick_place.project_check:main',
             'generate_dataset = pick_place.generate_dataset:main',
             'detector = pick_place.detector:main',
+            'pose_estimator = pick_place.pose_estimator:main',
         ],
     },
 )
