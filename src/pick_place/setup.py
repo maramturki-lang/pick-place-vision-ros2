@@ -27,6 +27,7 @@ setup(
             'move_to_pose = pick_place.move_to_pose:main',
             'spawn_scene = pick_place.spawn_scene:main',
             'project_check = pick_place.project_check:main',
+            'generate_dataset = pick_place.generate_dataset:main',
         ],
     },
 )
