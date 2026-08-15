@@ -3,7 +3,7 @@
 
 Boucle : nettoie la scene, spawn des objets aleatoires, attend la
 stabilisation physique, capture l'image, et calcule les bounding boxes
-a partir des poses reelles connues de Gazebo. Aucune annotation manuelle.
+a partir des poses REELLES lues dans Gazebo. Aucune annotation manuelle.
 """
 
 import argparse
@@ -11,8 +11,8 @@ import math
 import os
 import random
 import re
-import shutil
 import subprocess
+import tempfile
 import time
 
 import cv2
@@ -37,13 +37,13 @@ MIN_DIST = 0.09
 # ordre = identifiant de classe YOLO (0, 1, 2, 3)
 CLASS_NAMES = ["cube_rouge", "cube_bleu", "cylindre_vert", "sphere_jaune"]
 
+# (rgba, forme, demi-hauteur, rayon apparent)
 SPECS = {
     "cube_rouge":    ((0.8, 0.1, 0.1, 1),  "box",      0.015, 0.021),
     "cube_bleu":     ((0.1, 0.2, 0.8, 1),  "box",      0.015, 0.021),
     "cylindre_vert": ((0.1, 0.6, 0.15, 1), "cylinder", 0.020, 0.0125),
     "sphere_jaune":  ((0.9, 0.75, 0.1, 1), "sphere",   0.022, 0.022),
 }
-# (rgba, forme, demi-hauteur, rayon apparent)
 
 _tmp = []
 
@@ -92,7 +92,6 @@ def ign_service(service, reqtype, req, timeout=4000):
 
 
 def spawn(sdf, name, x, y, z, yaw):
-    import tempfile
     fd, path = tempfile.mkstemp(suffix=".sdf")
     with os.fdopen(fd, "w") as f:
         f.write(sdf)
@@ -106,6 +105,7 @@ def spawn(sdf, name, x, y, z, yaw):
 def remove(name):
     ign_service("remove", "Entity", f'name: "{name}", type: MODEL', 1500)
 
+
 def remove_all_objects():
     """Ne supprime que les modeles reellement presents."""
     out = subprocess.run(["ign", "model", "--list"],
@@ -114,7 +114,31 @@ def remove_all_objects():
         name = line.strip("- ").strip()
         if any(name.startswith(c + "_") for c in CLASS_NAMES):
             remove(name)
-            
+
+
+def gazebo_poses():
+    """Lit les poses REELLES apres stabilisation physique.
+
+    Indispensable : entre le spawn et la capture, les objets tombent et
+    roulent. Annoter les positions demandees produit des boites decalees,
+    et le modele apprend sur une verite terrain fausse.
+    """
+    out = subprocess.run(["ign", "model", "--list"],
+                         capture_output=True, text=True).stdout
+    names = [n.strip("- ").strip() for n in out.splitlines()
+             if any(n.strip("- ").strip().startswith(c + "_")
+                    for c in CLASS_NAMES)]
+
+    poses = {}
+    for name in names:
+        info = subprocess.run(["ign", "model", "-m", name, "-p"],
+                              capture_output=True, text=True).stdout
+        nums = re.findall(r"\[([-\d.e]+)\s+([-\d.e]+)\s+([-\d.e]+)\]", info)
+        if nums:
+            poses[name] = tuple(float(v) for v in nums[0])
+    return poses
+
+
 def project(x, y, z):
     depth = CAM_Z - z
     u = CX - (y - CAM_Y) * FX / depth
@@ -129,7 +153,7 @@ def scatter(n):
             break
         x = random.uniform(X_MIN, X_MAX)
         y = random.uniform(Y_MIN, Y_MAX)
-        if all((x-px)**2 + (y-py)**2 >= MIN_DIST**2 for px, py in pts):
+        if all((x - px) ** 2 + (y - py) ** 2 >= MIN_DIST ** 2 for px, py in pts):
             pts.append((x, y))
     return pts
 
@@ -159,35 +183,34 @@ class Capture(Node):
 
 def make_sample(node, idx, out_img, out_lbl, n_objects):
     """Genere une scene, capture, et ecrit image + annotations."""
-    # nettoyage
     remove_all_objects()
 
     positions = scatter(n_objects)
-    placed = []
     for i, (x, y) in enumerate(positions):
         cls = random.choice(CLASS_NAMES)
         rgba, shape, half_h, _ = SPECS[cls]
         z = TABLE_Z + half_h + 0.002
         yaw = random.uniform(0, math.pi)
-        if spawn(object_sdf(f"{cls}_{i}", rgba, shape), f"{cls}_{i}", x, y, z, yaw):
-            placed.append((cls, x, y, z))
+        spawn(object_sdf(f"{cls}_{i}", rgba, shape), f"{cls}_{i}", x, y, z, yaw)
 
-    time.sleep(1.2)                 # stabilisation physique
+    time.sleep(1.2)                      # stabilisation physique
     frame = node.grab()
     if frame is None:
         print(f"  [{idx}] pas d'image, echantillon ignore")
         return False
 
+    real = gazebo_poses()                # positions APRES stabilisation
+
     lines = []
-    for cls, x, y, z in placed:
-        _, _, _, radius = SPECS[cls]
+    for name, (x, y, z) in real.items():
+        cls = next(c for c in CLASS_NAMES if name.startswith(c + "_"))
+        radius = SPECS[cls][3]
         u, v, depth = project(x, y, z)
         r_px = radius * FX / depth
-        # normalisation YOLO
         xc, yc = u / IMG_W, v / IMG_H
         bw, bh = 2 * r_px / IMG_W, 2 * r_px / IMG_H
         if not (0 < xc < 1 and 0 < yc < 1):
-            continue                # objet hors champ
+            continue                     # objet hors champ
         lines.append(
             f"{CLASS_NAMES.index(cls)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
 
@@ -203,7 +226,8 @@ def main():
     ap.add_argument("--min-objects", type=int, default=2)
     ap.add_argument("--max-objects", type=int, default=6)
     ap.add_argument("--val-split", type=float, default=0.2)
-    ap.add_argument("-o", "--out", default=os.path.expanduser("~/pick_place_dataset"))
+    ap.add_argument("-o", "--out",
+                    default=os.path.expanduser("~/pick_place_dataset"))
     args = ap.parse_args()
 
     root = args.out
